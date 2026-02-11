@@ -1,0 +1,10 @@
+# PyInstaller Çıktıları (Bunları yükleme!)
+build/
+dist/
+*.spec
+
+# Python Gereksizleri
+__pycache__/
+*.pyc
+venv/
+.env
