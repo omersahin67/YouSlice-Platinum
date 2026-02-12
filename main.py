@@ -3,10 +3,9 @@ import yt_dlp
 import os
 import threading
 import subprocess
+import webbrowser
 from tkinter import filedialog
-import shutil
 
-# --- DİL VERİTABANI ---
 TEXTS = {
     "tr": {
         "app_title": "YouSlice Platinum",
@@ -31,7 +30,9 @@ TEXTS = {
         "status_url_err": "Lütfen Link Giriniz!",
         "status_file_err": "Dosya Seçilmedi!",
         "opt_video": "Video (MP4)",
-        "opt_audio": "Ses (MP3)"
+        "opt_audio": "Ses (MP3)",
+        "res_best": "En İyi (4K/8K)",
+        "lbl_res": "Kalite:"
     },
     "en": {
         "app_title": "YouSlice Platinum",
@@ -56,27 +57,28 @@ TEXTS = {
         "status_url_err": "Please Enter URL!",
         "status_file_err": "No File Selected!",
         "opt_video": "Video (MP4)",
-        "opt_audio": "Audio (MP3)"
+        "opt_audio": "Audio (MP3)",
+        "res_best": "Best (4K/8K)",
+        "lbl_res": "Quality:"
     }
 }
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-# --- ARKA PLAN MOTORU ---
 class VideoEngine:
-    def download_segment(self, url, start_time, end_time, save_path, is_audio=False, is_full=False):
+    def download_segment(self, url, start_time, end_time, save_path, is_audio=False, is_full=False, resolution="Best"):
+        if not os.path.exists(save_path):
+            try:
+                os.makedirs(save_path)
+            except OSError:
+                pass
+
         ydl_opts = {
             'outtmpl': f'{save_path}/%(title)s.%(ext)s',
             'quiet': True,
             'no_warnings': True,
         }
-
-        if not is_full:
-            ydl_opts['external_downloader'] = 'ffmpeg'
-            ydl_opts['external_downloader_args'] = {
-                'ffmpeg_i': ['-ss', start_time, '-to', end_time]
-            }
 
         if is_audio:
             ydl_opts.update({
@@ -88,15 +90,26 @@ class VideoEngine:
                 }],
             })
         else:
-            if not is_full:
-                if 'external_downloader_args' not in ydl_opts:
-                    ydl_opts['external_downloader_args'] = {}
-                ydl_opts['external_downloader_args']['ffmpeg_o'] = ['-c:v', 'copy', '-c:a', 'aac']
-            
+            if resolution == "1080p":
+                format_str = 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best[height<=1080]'
+            elif resolution == "720p":
+                format_str = 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]'
+            elif resolution == "480p":
+                format_str = 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best[height<=480]'
+            else:
+                format_str = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
+
             ydl_opts.update({
-                'format': 'bestvideo+bestaudio/best',
+                'format': format_str,
                 'merge_output_format': 'mp4',
             })
+
+            if not is_full:
+                ydl_opts['external_downloader'] = 'ffmpeg'
+                ydl_opts['external_downloader_args'] = {
+                    'ffmpeg_i': ['-ss', start_time, '-to', end_time],
+                    'ffmpeg_o': ['-c:v', 'libx264', '-preset', 'fast', '-c:a', 'aac', '-b:a', '192k']
+                }
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -107,14 +120,12 @@ class VideoEngine:
             return False
 
     def precise_trim(self, input_path, start_time, end_time, overwrite=False):
-        # Dosya yolu düzeltmeleri
         input_path = os.path.abspath(input_path)
         path, ext = os.path.splitext(input_path)
         temp_output = f"{path}_temp{ext}"
         
         is_audio_file = ext.lower() in ['.mp3', '.wav', '.m4a', '.flac']
         
-        # FFmpeg komutu
         cmd = ['ffmpeg', '-y', '-i', input_path, '-ss', start_time, '-to', end_time]
 
         if is_audio_file:
@@ -126,11 +137,8 @@ class VideoEngine:
         cmd.append(temp_output)
         
         try:
-            # Windows'ta pencere açılmasını engelle
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            
-            # Subprocess çalıştır
             result = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=startupinfo)
             
             if overwrite:
@@ -151,7 +159,6 @@ class VideoEngine:
             if os.path.exists(temp_output): os.remove(temp_output)
             return False, str(e)
 
-# --- ARAYÜZ (GUI) ---
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -163,35 +170,41 @@ class App(ctk.CTk):
             self.iconbitmap("YouSlice.ico")
         except:
             pass
-        self.geometry("650x850")
+            
+        self.geometry("650x900")
         self.engine = VideoEngine()
         self.default_path = os.path.join(os.path.expanduser("~"), "Downloads")
 
-        # --- ÜST BAR (Dil Seçimi) ---
         self.top_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.top_frame.pack(fill="x", padx=20, pady=(10,0))
         
+        self.btn_support = ctk.CTkButton(
+            self.top_frame, 
+            text="☕ Destek Ol", 
+            width=100, 
+            fg_color="#FFD700", 
+            text_color="black",
+            hover_color="#DAA520", 
+            command=self.open_support_link
+        )
+        self.btn_support.pack(side="left")
+
         self.lang_switch = ctk.CTkSegmentedButton(self.top_frame, values=["TR", "EN"], command=self.change_language, width=80)
         self.lang_switch.set("TR")
         self.lang_switch.pack(side="right")
 
-        # --- SEKME BUTONLARI (Manuel Tab Sistemi) ---
         self.tab_selector = ctk.CTkSegmentedButton(self, command=self.switch_tab, height=40, font=("Arial", 14, "bold"))
         self.tab_selector.pack(pady=15, padx=20, fill="x")
 
-        # --- GÖVDE (Frame Container) ---
         self.container = ctk.CTkFrame(self, fg_color="transparent")
         self.container.pack(fill="both", expand=True, padx=20, pady=10)
 
-        # 1. İndirme Sayfası (Frame)
         self.view_dl = ctk.CTkFrame(self.container)
         self.setup_download_view()
 
-        # 2. Edit Sayfası (Frame)
         self.view_edit = ctk.CTkFrame(self.container)
         self.setup_edit_view()
 
-        # Başlangıçta İndirme sayfasını göster
         self.active_view = "dl"
         self.update_ui_text()
         self.view_dl.pack(fill="both", expand=True)
@@ -202,7 +215,6 @@ class App(ctk.CTk):
         self.update_ui_text()
 
     def switch_tab(self, value):
-        # Tıklanan buton ismine göre sayfayı değiştir
         if value == self.t["tab_dl"]:
             self.view_edit.pack_forget()
             self.view_dl.pack(fill="both", expand=True)
@@ -215,23 +227,30 @@ class App(ctk.CTk):
     def update_ui_text(self):
         self.title(self.t["app_title"])
         
-        # Sekme İsimlerini Güncelle
         old_val = self.tab_selector.get()
         new_values = [self.t["tab_dl"], self.t["tab_edit"]]
         self.tab_selector.configure(values=new_values)
         
-        # Seçili sekmeyi koru
         if self.active_view == "dl":
             self.tab_selector.set(self.t["tab_dl"])
         else:
             self.tab_selector.set(self.t["tab_edit"])
 
-        # İndirme Sayfası Metinleri
         self.header_dl.configure(text=self.t["header_dl"])
         self.url_entry.configure(placeholder_text=self.t["placeholder_url"])
+        
         self.d_format_switch.configure(values=[self.t["opt_video"], self.t["opt_audio"]])
+        
         if self.d_format_switch.get() not in [self.t["opt_video"], self.t["opt_audio"]]:
-            self.d_format_switch.set(self.t["opt_video"]) # Varsayılanı sıfırla
+             self.d_format_switch.set(self.t["opt_video"])
+
+        self.lbl_res.configure(text=self.t["lbl_res"])
+        current_res = self.res_combo.get()
+        res_values = [self.t["res_best"], "1080p", "720p", "480p"]
+        self.res_combo.configure(values=res_values)
+        
+        if current_res not in res_values and current_res != "Best": 
+             self.res_combo.set(self.t["res_best"])
 
         self.full_video_chk.configure(text=self.t["chk_full"])
         self.path_btn.configure(text=self.t["btn_folder"])
@@ -239,7 +258,6 @@ class App(ctk.CTk):
         self.lbl_d_start.configure(text=self.t["lbl_start"])
         self.lbl_d_end.configure(text=self.t["lbl_end"])
 
-        # Edit Sayfası Metinleri
         self.header_edit.configure(text=self.t["header_edit"])
         self.file_entry.configure(placeholder_text=self.t["placeholder_file"])
         self.file_btn.configure(text=self.t["btn_file"])
@@ -248,7 +266,6 @@ class App(ctk.CTk):
         self.lbl_e_start.configure(text=self.t["lbl_start"])
         self.lbl_e_end.configure(text=self.t["lbl_end"])
 
-    # --- UI KURULUMLARI ---
     def setup_download_view(self):
         parent = self.view_dl
         self.header_dl = ctk.CTkLabel(parent, text="", font=("Arial", 22, "bold"))
@@ -258,8 +275,18 @@ class App(ctk.CTk):
         self.url_entry.pack(pady=10)
 
         self.d_format_var = ctk.StringVar(value="Video (MP4)")
-        self.d_format_switch = ctk.CTkSegmentedButton(parent, variable=self.d_format_var)
-        self.d_format_switch.pack(pady=10)
+        self.d_format_switch = ctk.CTkSegmentedButton(parent, variable=self.d_format_var, command=self.toggle_resolution_menu)
+        self.d_format_switch.pack(pady=5)
+
+        self.res_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        self.res_frame.pack(pady=5)
+        
+        self.lbl_res = ctk.CTkLabel(self.res_frame, text="Kalite:", font=("Arial", 12))
+        self.lbl_res.pack(side="left", padx=5)
+
+        self.res_combo = ctk.CTkComboBox(self.res_frame, values=["En İyi (4K/8K)", "1080p", "720p", "480p"], width=150, state="readonly")
+        self.res_combo.set("En İyi (4K/8K)")
+        self.res_combo.pack(side="left")
 
         self.full_video_var = ctk.BooleanVar(value=False)
         self.full_video_chk = ctk.CTkCheckBox(parent, variable=self.full_video_var, command=self.toggle_time_inputs)
@@ -313,9 +340,7 @@ class App(ctk.CTk):
         self.e_status = ctk.CTkLabel(parent, text="", text_color="gray")
         self.e_status.pack()
 
-    # --- YARDIMCI METOTLAR ---
     def create_time_inputs(self, parent, start_prefix, end_prefix, label_prefix):
-        # Saat : Dakika : Saniye girişleri
         lbl_s = ctk.CTkLabel(parent, text="S:")
         lbl_s.grid(row=0, column=0, padx=5, pady=5)
         setattr(self, f"lbl_{label_prefix}_start", lbl_s)
@@ -341,6 +366,12 @@ class App(ctk.CTk):
         widgets = [self.d_start_hour, self.d_start_min, self.d_start_sec, self.d_end_hour, self.d_end_min, self.d_end_sec]
         for w in widgets: w.configure(state=state)
 
+    def toggle_resolution_menu(self, value):
+        if value == self.t["opt_audio"]:
+            self.res_frame.pack_forget()
+        else:
+            self.res_frame.pack(after=self.d_format_switch, pady=5)
+
     def get_time_string(self, prefix):
         return f"{getattr(self, f'{prefix}_hour').get().zfill(2)}:{getattr(self, f'{prefix}_min').get().zfill(2)}:{getattr(self, f'{prefix}_sec').get().zfill(2)}"
 
@@ -352,7 +383,6 @@ class App(ctk.CTk):
         path = filedialog.askopenfilename(filetypes=[("Media", "*.mp4 *.mkv *.webm *.avi *.mp3 *.wav")])
         if path: self.file_entry.delete(0, "end"); self.file_entry.insert(0, path)
 
-    # --- ÇALIŞTIRMA MANTIĞI ---
     def run_download_thread(self): threading.Thread(target=self.process_download, daemon=True).start()
 
     def process_download(self):
@@ -370,8 +400,9 @@ class App(ctk.CTk):
         save_path = self.path_entry.get()
         is_audio = self.d_format_switch.get() == self.t["opt_audio"]
         is_full = self.full_video_var.get()
+        resolution = self.res_combo.get()
 
-        if self.engine.download_segment(url, start, end, save_path, is_audio, is_full):
+        if self.engine.download_segment(url, start, end, save_path, is_audio, is_full, resolution):
             self.d_status.configure(text=self.t["status_success"], text_color="green")
         else:
             self.d_status.configure(text=self.t["status_error"], text_color="red")
@@ -404,6 +435,9 @@ class App(ctk.CTk):
             self.e_status.configure(text=self.t["status_error"], text_color="red")
         
         self.e_btn.configure(state="normal")
+    
+    def open_support_link(self):
+        webbrowser.open("https://www.shopier.com/omertsahin/44191727")
 
 if __name__ == "__main__":
     app = App()
